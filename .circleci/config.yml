@@ -1,0 +1,122 @@
+# Java Gradle CircleCI 2.0 configuration file
+#
+# Check https://circleci.com/docs/2.0/language-java/ for more details
+#
+version: 2.1
+jobs:
+  build:
+    docker:
+      - image: circleci/openjdk:11-jdk-buster
+    working_directory: ~/repo
+    environment:
+      JVM_OPTS: -Xmx3200m
+      TERM: xterm
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "build.gradle" }}
+            - v1-dependencies-
+      - save_cache:
+          paths:
+            - ~/.gradle
+          key: v1-dependencies-{{ checksum "build.gradle" }}
+      - run:
+          name: Compile
+          command: gradle compileJava compileTestJava
+      - run:
+          name: Lint
+          command: gradle spotlessCheck
+      - persist_to_workspace:
+          root: .
+          paths:
+            - build/*
+            - .gradle/*
+  test:
+    docker:
+      - image: circleci/openjdk:11-jdk-buster
+    working_directory: ~/repo
+    environment:
+      JVM_OPTS: -Xmx3200m
+      TERM: xterm
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "build.gradle" }}
+            - v1-dependencies-
+      - attach_workspace:
+          at: .
+      - run:
+          name: Unit test
+          command: gradle test
+      - run:
+          name: Save test results
+          command: |
+            mkdir -p ~/test-results/junit/
+            find . -type f -regex ".*/build/test-results/.*xml" -exec cp {} ~/test-results/junit/ \;
+          when: always
+      - store_test_results:
+          path: ~/test-results
+      - store_artifacts:
+          path: ~/test-results/junit
+      - run:
+          name: Test coverage
+          command: gradle jacocoTestReport jacocoTestCoverageVerification
+  publish:
+    docker:
+      - image: circleci/openjdk:11-jdk-buster
+    working_directory: ~/repo
+    environment:
+      JVM_OPTS: -Xmx3200m
+      TERM: xterm
+    steps:
+      - setup_remote_docker
+      - run:
+          name: Docker login
+          command: echo ${DOCKERHUB_ACCESS_TOKEN} | docker login --username ${DOCKERHUB_USERNAME} --password-stdin
+      - checkout
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "build.gradle" }}
+            - v1-dependencies-
+      - attach_workspace:
+          at: .
+      - run:
+          name: Docker image build
+          command: gradle bootBuildImage
+      - run:
+          name: Docker image publish (branch version)
+          command: |
+            docker tag dangomango2/ragdoll dangomango2/ragdoll:${CIRCLE_BRANCH}
+            docker image push dangomango2/ragdoll:${CIRCLE_BRANCH}
+      - when:
+          condition: << pipeline.git.tag >>
+          steps:
+            - run:
+                name: Docker image publish (tag version)
+                command: |
+                  docker tag dangomango2/ragdoll dangomango2/ragdoll:${CIRCLE_TAG}
+                  docker image push dangomango2/ragdoll:${CIRCLE_TAG}
+workflows:
+  version: 2
+  ci:
+    jobs:
+      - build:
+          filters:
+            tags:
+              ignore: /.*/
+      - test:
+          requires:
+            - build
+          filters:
+            tags:
+              ignore: /.*/
+      - publish:
+          context:
+            - dockerhub
+          requires:
+            - test
+          filters:
+            tags:
+              only: /.*/
