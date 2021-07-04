@@ -1,2 +1,2 @@
 # ragdoll
-Why is this called ragdoll
+backend for dango-mango skincare app
